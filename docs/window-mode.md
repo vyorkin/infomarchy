@@ -49,6 +49,19 @@ untouched. Load it from `~/.config/hypr/hyprland.lua`:
 require("hypr.infomarchy")
 ```
 
+The dashboard is also opted out of Omarchy's shared `default-opacity` tag. The
+class `org.quickshell` is otherwise styled as a translucent shell surface, so
+without this the whole window (cards included) composites semi-transparent and
+the wallpaper shows through it:
+
+```lua
+-- Force the dashboard fully opaque.
+o.window(
+  { class = "^org\\.quickshell$", title = "^Infomarchy$" },
+  { tag = "-default-opacity", opacity = "1.0 1.0 override" }
+)
+```
+
 Change `workspace = "10"` to any other workspace id you prefer.
 
 ## Toggling with SUPER+D
