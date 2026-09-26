@@ -1,50 +1,28 @@
 import QtQuick
 import Quickshell
-import Quickshell.Hyprland
 import Quickshell.Io
-import Quickshell.Wayland
-import qs.Commons
-import qs.Ui
-import "bar-insets.js" as BarInsets
 
-// Background-layer host. Replaces omarchy.background (manifest clonedFrom), so
-// the theme's wallpaper is still shown — dimmed — behind the live dashboard,
-// and `omarchy-theme-bg-set` / `omarchy-theme-set` keep working through the
-// same IPC target. Omarchy's theme-set calls `background themeTransition`;
-// without that function the wallpaper lags on the 5s symlink poll and the
-// snapshot files theme-set deletes after 3s can win the race.
+// Headless service. This file used to be the wallpaper host: it replaced
+// omarchy.background and painted the dashboard on the Background layer of
+// every workspace. It is now the data/notification service only — it keeps
+// collecting the machine and agent snapshot and sends "an agent needs you"
+// notifications while the windowed dashboard (Overlay.qml) is closed.
+//
+// The wallpaper role is handed back to stock omarchy.background (manifest.json
+// no longer declares clonedFrom), and there is no Background-layer surface
+// here any more, so the dashboard can only appear as the app window.
 Scope {
   id: root
 
-  // Declared so omarchy-shell injects PluginShellApi (`if ("shell" in inst)`).
-  // bar.position, bar.barSize and bar.barHidden on that object are live
-  // bindings; the reads below are what move the desk when the bar moves
-  // after this plugin has already loaded.
+  // Declared so the shell's injection contract is unchanged even though there
+  // is no bar-aware surface here any more.
   property var shell: null
-  readonly property int barFallbackInset: Math.round(40 * Style.fontScale)
-  readonly property var barEdgeInsets: BarInsets.insets(
-    shell && shell.bar ? {
-      position: shell.bar.position,
-      barSize: shell.bar.barSize,
-      barHidden: shell.bar.barHidden
-    } : null,
-    barFallbackInset)
 
-  // Match omarchy-theme-bg-set and Color.currentThemePath: $HOME/.local/state,
-  // not XDG_STATE_HOME, which can point somewhere the CLI never writes.
-  readonly property string home: Quickshell.env("HOME")
-  readonly property string stateHome: home + "/.local/state"
-  readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
-  property string background: ""
-  // How much of the wallpaper survives under the glass. 0 = solid theme bg.
-  property real wallpaperOpacity: 0.32
   // Transient sanitized sample data for public screenshots. Never persisted
   // across a login: the flag lives as a marker file under XDG_RUNTIME_DIR so
-  // the overlay (a separate Scope with its own InfoModel) sees the same mode,
+  // the window (a separate Scope with its own InfoModel) sees the same mode,
   // and the file is removed on every shell start.
   property bool demoMode: false
-  // The desk view on the primary screen, for the geometry IPC.
-  property var deskView: null
   readonly property string demoMarkerPath: (Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + Quickshell.env("UID"))) + "/infomarchy-demo"
   Process { id: demoMarkerWriter; property var pending: []; command: pending }
   function publishDemoMarker(on) {
@@ -53,13 +31,10 @@ Scope {
   }
   Component.onCompleted: publishDemoMarker(false)
 
-  // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw, hyprctl,
-  // nvidia-smi, git per session, a full opencode.db scan). Do not pay it while
-  // SUPER+I has the dashboard hidden.
-  // Notifications are dispatched from THIS model's snapshots, so stopping it
-  // outright while SUPER+I hides the desk would also silence every "agent
-  // needs your answer" toast. Keep collecting at a quarter of the cadence
-  // while hidden if alerts are on; stop entirely only when they are off too.
+  // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw,
+  // hyprctl, nvidia-smi, git per session, a full opencode.db scan). This
+  // service exists so notifications keep working while the window is closed,
+  // so it idles at a quarter cadence unless the dashboard says otherwise.
   InfoModel {
     id: infoModel
     refreshMs: dashboardSettings.dashboardVisible ? 4000 : 16000
@@ -68,45 +43,6 @@ Scope {
     active: dashboardSettings.ready && (dashboardSettings.dashboardVisible || dashboardSettings.notificationsEnabled)
   }
   InfoSettings { id: dashboardSettings }
-
-  function imageUrl(path) { return Util.fileUrl(path) }
-  // Omarchy decides what counts as a video wallpaper; ask it when it can
-  // answer, so a format added there is understood here without a change.
-  // Fall back to its current list on an Omarchy whose Util predates video
-  // wallpapers — calling a function that is not there would take the plugin
-  // down on the very desktops the fallback exists for.
-  // A live stream overrides the wallpaper file while it is set. It is kept
-  // separate from `background` so stopping restores whatever file was there
-  // without having to re-read the symlink or guess.
-  property string streamUrl: ""
-  property bool playbackWanted: true
-
-  readonly property bool streaming: root.streamUrl !== ""
-  // What the wallpaper surface is actually showing right now.
-  readonly property string wallpaperSource: root.streaming ? root.streamUrl : root.background
-  readonly property bool videoBackground: root.streaming || root.isVideo(root.background)
-  function isVideo(path) {
-    if (typeof Util.isVideoPath === "function") return Util.isVideoPath(path)
-    return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
-  }
-  function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
-  // Two callers, two meanings. An explicit set is a choice and ends a stream —
-  // leaving the stream on top would silently ignore the file the user picked.
-  // The 5s symlink poll is not a choice: it must keep the file wallpaper up to
-  // date underneath a stream without tearing the stream down on every tick.
-  function setBackground(path) {
-    var next = String(path || "").trim()
-    // Only a set that actually CHANGES the wallpaper counts as a choice.
-    // Other plugins re-assert the current wallpaper on their own schedules
-    // (auto-wallpaper does), and treating those as a choice tore a running
-    // stream down a few seconds after it started.
-    if (next !== root.background) root.streamUrl = ""
-    root.trackBackground(next)
-  }
-
-  function trackBackground(path) {
-    root.background = String(path || "").trim()
-  }
 
   function dispatchNotifications() {
     if (root.demoMode || !dashboardSettings.ready || !infoModel.ready) return
@@ -123,6 +59,8 @@ Scope {
       var title = infoModel.plainText(event.title || "Infomarchy", 100)
       var body = infoModel.plainText(event.body || "AI session changed", 240)
       var urgency = event.urgency === "normal" ? "normal" : "low"
+      // The notification body opens the windowed dashboard on the workspace it
+      // is pinned to (see ~/.config/hypr/infomarchy.lua).
       Quickshell.execDetached([
         "omarchy-notification-send", "--app-name", "Infomarchy", "-u", urgency, "-t", "8000",
         title, body, "--exec", "omarchy-shell", "shell", "toggle", "nixfred.infomarchy", "{}"
@@ -140,97 +78,12 @@ Scope {
     function onReadyChanged() { if (dashboardSettings.ready) root.dispatchNotifications() }
   }
 
-  function applyThemePayload(colorsB64, shellB64) {
-    try { Color.loadColors(Util.decodeBase64(colorsB64)) } catch (e) {}
-    try { Color.loadShell(Util.decodeBase64(shellB64)) } catch (e2) {}
-    Style.scheduleRefresh()
-  }
-
-  // theme-set passes a 3s snapshot as `path` and the durable symlink target as
-  // `finalPath`. We skip the stock wipe animation, so we must display
-  // finalPath — pointing at the snapshot would 404 after the cleanup rm.
-  function themeTransition(fromPath, path, finalPath, colorsB64, shellB64) {
-    root.setBackground(finalPath || path)
-    root.applyThemePayload(colorsB64, shellB64)
-  }
-
-  Process {
-    id: readlinkProc
-    command: ["readlink", "-f", root.currentBackgroundLink]
-    stdout: StdioCollector { onStreamFinished: root.trackBackground(String(text || "").trim()) }
-  }
-  Timer { interval: 5000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refreshBackground() }
-
-  Process {
-    id: bgSwitchProc
-    command: ["omarchy-theme-bg-switcher"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var selected = String(text || "").trim()
-        if (selected.length > 0 && selected.length <= 4096 && selected.charAt(0) === "/" && !bgSetProc.running) {
-          bgSetProc.command = ["omarchy-theme-bg-set", selected]
-          bgSetProc.running = true
-        }
-      }
-    }
-  }
-
-  Process {
-    id: bgSetProc
-    onExited: root.refreshBackground()
-  }
-
-  // Same contract as the built-in background plugin, so the CLI keeps working.
-  IpcHandler {
-    target: "background"
-    function refresh(): void { root.refreshBackground() }
-    function set(path: string): void { root.setBackground(path) }
-    function setInstant(path: string): void { root.setBackground(path) }
-    function transition(fromPath: string, path: string): void { root.setBackground(path) }
-    function themeTransition(fromPath: string, path: string, finalPath: string, colorsB64: string, shellB64: string): void {
-      root.themeTransition(fromPath, path, finalPath, colorsB64, shellB64)
-    }
-    function selector(): void { if (!bgSwitchProc.running) bgSwitchProc.running = true }
-    // Play a remote URL as the wallpaper without writing a file. Resolving the
-    // URL is the caller's job — it expires, so whoever owns it owns refreshing it.
-    function stream(url: string): string {
-      var next = String(url || "").trim()
-      if (!/^https?:\/\//i.test(next)) return "not a stream URL"
-      root.streamUrl = next
-      root.playbackWanted = true
-      return "streaming"
-    }
-    function stopStream(): string {
-      root.streamUrl = ""
-      root.refreshBackground()
-      return "stopped"
-    }
-    function streaming(): string { return root.streaming ? "on" : "off" }
-    // Pause decoding without changing the wallpaper.
-    function playback(state: string): string {
-      var want = String(state || "status").toLowerCase()
-      if (want === "on" || want === "play") root.playbackWanted = true
-      else if (want === "off" || want === "pause") root.playbackWanted = false
-      else if (want === "toggle") root.playbackWanted = !root.playbackWanted
-      else if (want !== "status") return "usage: playback on|off|toggle|status"
-      return root.playbackWanted ? "on" : "off"
-    }
-    // Infomarchy owns this target while the desk runs, so the sound switch for
-    // a video wallpaper has to live here too or the CLI has nowhere to call.
-    function audio(state: string): string {
-      var want = String(state || "status").toLowerCase()
-      if (want === "on" || want === "true") dashboardSettings.setVideoAudio(true)
-      else if (want === "off" || want === "false") dashboardSettings.setVideoAudio(false)
-      else if (want === "toggle") dashboardSettings.toggleVideoAudio()
-      else if (want !== "status") return "usage: audio on|off|toggle|status"
-      return dashboardSettings.videoAudio ? "on" : "off"
-    }
-  }
+  // Settings and control surface for the windowed dashboard. The window has
+  // its own InfoModel/InfoSettings instance but shares the same persisted
+  // dashboard.json, so every setter here is seen by the window too.
   IpcHandler {
     target: "infomarchy"
     function refresh(): void { infoModel.refresh() }
-    function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
     function setDashboardVisible(v: string): void { dashboardSettings.setDashboardVisible(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleDashboard(): void { dashboardSettings.toggleDashboardVisible() }
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
@@ -239,204 +92,27 @@ Scope {
     function setPrivacy(v: string): void { dashboardSettings.setPrivacyMode(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function togglePrivacy(): void { dashboardSettings.togglePrivacyMode() }
     function getPrivacy(): string { return dashboardSettings.privacyMode ? "true" : "false" }
-    function geometry(): string { return root.deskView ? root.deskView.geometryReport() : "{}" }
+    // The dashboard is a window now; geometry is intrinsic to it, so this
+    // reports nothing rather than a stale surface that no longer exists.
+    function geometry(): string { return "{}" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
     function setNotifications(v: string): void { dashboardSettings.setNotificationsEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleNotifications(): void { dashboardSettings.toggleNotificationsEnabled() }
     function setQuietHours(v: string): void { dashboardSettings.setQuietHoursEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
-    // Idle sessions drop off the desk by default; this puts them back without
-    // a rebuild, and setQuietMinutes moves the line they fall behind.
+    function toggleQuietHours(): void { dashboardSettings.toggleQuietHoursEnabled() }
+    // Idle sessions drop off the dashboard by default; this puts them back
+    // without a rebuild, and setQuietMinutes moves the line they fall behind.
     function setHideQuiet(v: string): void { dashboardSettings.setHideQuietSessions(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleHideQuiet(): void { dashboardSettings.toggleHideQuietSessions() }
     function getHideQuiet(): string { return dashboardSettings.hideQuietSessions ? "true" : "false" }
-    // 0 restores the desk to every workspace.
-    function setDeskWorkspace(v: string): string { return dashboardSettings.setDeskWorkspace(Number(v)) ? "ok" : "usage: setDeskWorkspace 0-" + dashboardSettings.maxWorkspace }
-    function getDeskWorkspace(): string { return String(dashboardSettings.deskWorkspace) }
     function setQuietMinutes(v: string): void { dashboardSettings.setSessionQuietMinutes(Number(v)) }
     function getQuietMinutes(): string { return String(dashboardSettings.sessionQuietMinutes) }
-    function toggleQuietHours(): void { dashboardSettings.toggleQuietHoursEnabled() }
     function setDemo(v: string): void {
       root.demoMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0
       root.publishDemoMarker(root.demoMode)
       infoModel.refresh()
     }
     function getDemo(): string { return root.demoMode ? "true" : "false" }
-  }
-
-  Variants {
-    model: Quickshell.screens
-    PanelWindow {
-      id: panel
-      required property var modelData
-      screen: modelData
-      // Hyprland leaves a mapped layer at its old global origin when a monitor
-      // moves (undock). Pulse unmapped so the compositor re-places us.
-      visible: !remapGuard.remapping
-      anchors { top: true; bottom: true; left: true; right: true }
-      color: infoModel.themeBackground
-      WlrLayershell.namespace: "omarchy-background"
-      WlrLayershell.layer: WlrLayer.Background
-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-      exclusionMode: ExclusionMode.Ignore
-      // A parked background layer has been seen to drop its buffer; keep rendering.
-      updatesEnabled: true
-
-      // Each output answers for itself: a fullscreen window on one monitor
-      // must not freeze the wallpaper still on show next to it.
-      readonly property var hyprlandMonitor: Hyprland.monitorFor(modelData)
-      readonly property var visibleWorkspace: hyprlandMonitor ? hyprlandMonitor.activeWorkspace : null
-      readonly property bool fullscreenHere: visibleWorkspace ? visibleWorkspace.hasFullscreen : false
-      // 0 means every workspace — the behaviour before this setting existed.
-      // While the workspace is unknown (no Hyprland monitor yet, early in
-      // startup) the desk stays on rather than blinking out: an unset gate
-      // must never be the reason the dashboard is missing.
-      readonly property bool deskWorkspaceMatches: dashboardSettings.deskWorkspace === 0
-        || !visibleWorkspace || visibleWorkspace.id === dashboardSettings.deskWorkspace
-
-      // A wallpaper's sound track plays from one output only, or every monitor
-      // layers its own copy of it. Same rule the built-in renderer uses.
-      readonly property bool firstScreen: Quickshell.screens.length > 0
-        && String(Quickshell.screens[0].name || "") === String(modelData.name || "")
-
-      ScreenMoveRemap {
-        id: remapGuard
-        window: panel
-      }
-
-      // hymission's stage sidebar reserves a left band over the background
-      // layer; keep the dashboard clear of it. Polled — the reservation only
-      // changes with config or monitor changes, not per frame.
-      property var stageState: null
-      readonly property real stageReservation: {
-        var screens = stageState && stageState.screens ? stageState.screens : []
-        for (var i = 0; i < screens.length; i++)
-          if (screens[i].monitor === modelData.name)
-            return Math.max(0, Number(screens[i].reservation) || 0)
-        return 0
-      }
-      Process {
-        id: stageStateProc
-        command: ["sh", "-c", "hyprctl hymission-stage-state 2>/dev/null || true"]
-        stdout: StdioCollector {
-          waitForEnd: true
-          onStreamFinished: {
-            try { panel.stageState = JSON.parse(String(text || "").trim()) }
-            catch (e) { panel.stageState = null }
-          }
-        }
-      }
-      Timer {
-        interval: 1500
-        triggeredOnStart: true
-        running: true
-        repeat: true
-        onTriggered: if (!stageStateProc.running) stageStateProc.running = true
-      }
-
-      // Dimming belongs to the dashboard. When SUPER+I hides it, restore the
-      // wallpaper to full brightness instead of leaving an invisible shade.
-      // It is carried by the wrapper so a still and a video dim alike.
-      Item {
-        anchors.fill: parent
-        opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0
-        Behavior on opacity { NumberAnimation { duration: 300 } }
-
-        // An Image cannot decode a video, and handing it one only logs
-        // "Unsupported image format" and leaves the desk on the theme colour.
-        // Each surface is given a source only for its own kind of file.
-        WaveWallpaper {
-          anchors.fill: parent
-          visible: !root.videoBackground
-          source: root.videoBackground ? "" : root.imageUrl(root.background)
-          fillMode: Image.PreserveAspectCrop
-          asynchronous: true
-          cache: true
-          playing: !panel.fullscreenHere
-        }
-
-        Loader {
-          id: videoWallpaper
-          anchors.fill: parent
-          active: root.videoBackground
-          source: "BackgroundWallpaper.qml"
-          onStatusChanged: {
-            if (status === Loader.Error)
-              console.warn("Infomarchy: this Omarchy has no video wallpaper support; " + root.background + " cannot be shown")
-          }
-        }
-
-        // The path is only ever pushed while it is a video: the two properties
-        // update in no fixed order, so a bound value can be evaluated against
-        // the stale flag and hand the player a still for one pass.
-        Binding {
-          target: videoWallpaper.item
-          property: "path"
-          value: root.wallpaperSource
-          when: videoWallpaper.item !== null && root.videoBackground
-          restoreMode: Binding.RestoreNone
-        }
-
-        // Qt's FFmpeg engine drives its own clock, so a wallpaper nothing can
-        // see keeps decoding until it is told not to.
-        Binding {
-          target: videoWallpaper.item
-          property: "playbackEnabled"
-          value: root.playbackWanted && !panel.fullscreenHere
-          when: videoWallpaper.item !== null
-        }
-
-        // Off unless the user asked for it, and never from a paused player:
-        // a wallpaper that starts talking the moment it is set is a bug.
-        Binding {
-          target: videoWallpaper.item
-          property: "audioEnabled"
-          value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere
-          when: videoWallpaper.item !== null
-        }
-      }
-
-      // Empty-desk gestures: left double-click = wallpaper switcher (stock
-      // omarchy.background behavior, restored 2026-08-22), right single-click =
-      // wallpaper switcher (Infomarchy addition). Stock's right-double-click
-      // theme switcher is intentionally not mirrored: it would race the
-      // right single-click and open two menus.
-      MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
-        onClicked: function(mouse) {
-          if (mouse.button === Qt.RightButton && !bgSwitchProc.running) bgSwitchProc.running = true
-        }
-        onDoubleClicked: function(mouse) {
-          if (mouse.button === Qt.LeftButton && !bgSwitchProc.running) bgSwitchProc.running = true
-          mouse.accepted = true
-        }
-      }
-
-      InfoView {
-        anchors {
-          top: parent.top
-          bottom: parent.bottom
-          right: parent.right
-          left: parent.left
-          leftMargin: panel.stageReservation
-        }
-        desk: infoModel
-        settings: dashboardSettings
-        interactive: true
-        keyboardAvailable: false
-        topInset: root.barEdgeInsets.top
-        rightInset: root.barEdgeInsets.right
-        bottomInset: root.barEdgeInsets.bottom
-        leftInset: root.barEdgeInsets.left
-        Component.onCompleted: if (!root.deskView) root.deskView = this
-        // The cards, not the wallpaper: a background layer belongs to an
-        // output and is drawn under every workspace on it, so pinning the desk
-        // to one workspace has to be done here rather than on the surface.
-        // Hiding the PanelWindow instead would take the wallpaper with it and
-        // leave the other workspaces on the flat theme colour.
-        visible: dashboardSettings.ready && dashboardSettings.dashboardVisible && panel.deskWorkspaceMatches
-      }
-    }
   }
 }
