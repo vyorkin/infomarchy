@@ -312,7 +312,7 @@ Item {
     })
   }
   readonly property int radius: Math.max(Style.cornerRadius, 0)
-  readonly property color cardBg: Util.alpha(view.desk.themeBackground, 0.62)
+  readonly property color cardBg: Util.alpha(view.desk.themeBackground, 1.0)
   readonly property color cardBorder: Util.alpha(view.desk.themeForeground, 0.14)
   readonly property color textDim: Util.alpha(view.desk.themeForeground, 0.62)
   readonly property color textFaint: Util.alpha(view.desk.themeForeground, 0.38)
