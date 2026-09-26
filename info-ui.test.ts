@@ -133,97 +133,53 @@ describe("multiplexer-aware focus", () => {
   });
 });
 
-describe("overlay shows the real desktop", () => {
-  test("SUPER+D paints the wallpaper, and SUPER+I applies inside the overlay", () => {
+describe("the dashboard is an application window", () => {
+  test("SUPER+D opens a real window, not a fullscreen layer surface", () => {
     const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
-    expect(overlay).toContain('source: root.videoBackground ? "" : Util.fileUrl(root.background)');
-    expect(overlay).toContain("opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0");
-    expect(overlay).toContain("visible: dashboardSettings.ready && dashboardSettings.dashboardVisible\n          onNavigated: root.close()");
-    expect(overlay).not.toContain("Util.alpha(infoModel.themeBackground, 0.88)");
+    // A Quickshell FloatingWindow is an ordinary Wayland toplevel: it is in
+    // the window list, can be moved/resized, and is pinned to one workspace
+    // by a Hyprland rule instead of being painted on every workspace.
+    expect(overlay).toContain("FloatingWindow {");
+    expect(overlay).toContain('title: "Infomarchy"');
+    expect(overlay).toContain("visible: root.opened");
+    expect(overlay).not.toContain("WlrLayershell");
+    expect(overlay).not.toContain("WlrLayer.");
+    // Closing keeps the shell's open state in sync, from both the host
+    // (shell.hide) and the user (Esc / window close button).
+    expect(overlay).toContain('root.shell.hide("nixfred.infomarchy")');
+    expect(overlay).toContain("onVisibleChanged: if (!visible && !root.closingFromHost) root.requestClose()");
   });
 });
 
-describe("a video wallpaper plays instead of showing nothing", () => {
-  // An Image cannot decode a video: it logs "Unsupported image format" and
-  // leaves the desk on the flat theme colour, which is what selecting an
-  // Omarchy video background used to do.
-  const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
+describe("the plugin no longer owns the wallpaper", () => {
+  // Wallpaper rendering was handed back to stock omarchy.background: the
+  // plugin used to replace it (manifest clonedFrom) and paint the dashboard
+  // on the Background layer of every workspace.
+  const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
   const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
-  const player = readFileSync(join(import.meta.dir, "BackgroundWallpaper.qml"), "utf8");
+  const manifest = readFileSync(join(import.meta.dir, "manifest.json"), "utf8");
 
-  test("each surface is handed only its own kind of file", () => {
-    // The desk can also be handed a live stream URL, which is a video no
-    // matter what the wallpaper file is. The overlay has no stream of its
-    // own, so it still asks the path and only the path.
-    expect(wallpaper).toContain("readonly property bool videoBackground: root.streaming || root.isVideo(root.background)");
-    expect(overlay).toContain("readonly property bool videoBackground: root.isVideo(root.background)");
-    for (const source of [wallpaper, overlay]) {
-      // Both the still and the player test the path itself. Deriving one from
-      // the other lets a URL evaluate against the stale flag and hand the
-      // wrong file over for a pass.
-      expect(source).toContain("when: videoWallpaper.item !== null && root.videoBackground");
-    }
-    expect(wallpaper).toContain('source: root.videoBackground ? "" : root.imageUrl(root.background)');
-    expect(overlay).toContain('source: root.videoBackground ? "" : Util.fileUrl(root.background)');
-  });
-
-  test("Omarchy decides what a video is, and an older one still gets an answer", () => {
-    // Both surfaces paint the wallpaper, so both must agree on what a video is
-    // — and agree with the Omarchy they are running on.
-    for (const [name, source] of [["Infomarchy.qml", wallpaper], ["Overlay.qml", overlay]] as const) {
-      const fn = source.match(/function isVideo\(path\) \{[\s\S]*?\n  \}/)?.[0];
-      expect(fn, name).toBeTruthy();
-
-      // A format added to Omarchy is understood here without a change.
-      const withUtil = Function("Util", `return (${fn})`)({ isVideoPath: (p: string) => /\.(mp4|gif)$/i.test(String(p || "")) });
-      expect(withUtil("/bg/matrix-vortex.mp4"), name).toBe(true);
-      expect(withUtil("/bg/added-later.gif"), name).toBe(true);
-      expect(withUtil("/bg/still.png"), name).toBe(false);
-
-      // An Omarchy whose Util predates video wallpapers has no such function.
-      // Calling it anyway would take the plugin down on exactly the desktops
-      // the fallback exists for.
-      const noUtil = Function("Util", `return (${fn})`)({});
-      expect(() => noUtil("/bg/still.png"), name).not.toThrow();
-      expect(noUtil("/bg/matrix-vortex.mp4"), name).toBe(true);
-      expect(noUtil("/bg/clip.WEBM"), name).toBe(true);
-      expect(noUtil("/bg/still.png"), name).toBe(false);
-      expect(noUtil(""), name).toBe(false);
-      expect(noUtil(null), name).toBe(false);
+  test("no Background-layer surface, wallpaper renderer or video player remain", () => {
+    for (const [name, source] of [["Infomarchy.qml", service], ["Overlay.qml", overlay]] as const) {
+      expect(source, name).not.toContain("WlrLayershell");
+      expect(source, name).not.toContain("WlrLayer.");
+      expect(source, name).not.toContain("BackgroundWallpaper.qml");
+      expect(source, name).not.toContain("wallpaperOpacity");
     }
   });
 
-  test("the player is reached by URL so an Omarchy without video support still loads", () => {
-    // Naming BackgroundMedia in Infomarchy.qml would fail the whole plugin to
-    // compile where the type does not exist; an unloaded file resolves nothing.
-    expect(player).toContain("BackgroundMedia {");
-    // Silence used to be hardcoded here. It moved to the host when the desk
-    // gained a sound switch, so the guarantee is now asserted per surface
-    // below rather than in the shared player.
-    expect(player).not.toContain("audioEnabled: true");
-    for (const source of [wallpaper, overlay]) {
-      expect(source).toContain('source: "BackgroundWallpaper.qml"');
-      expect(source).not.toContain("BackgroundMedia {");
-    }
+  test("the stock background service is restored", () => {
+    // Without clonedFrom Omarchy no longer disables omarchy.background, and
+    // the plugin no longer claims the 'background' IPC target.
+    expect(manifest).not.toContain("clonedFrom");
+    expect(service).not.toContain('target: "background"');
   });
 
-  test("a wallpaper only makes sound where a switch says so", () => {
-    // BackgroundMedia lives in Omarchy, not here, so its default for
-    // audioEnabled is not observable from this repo. Neither surface may rely
-    // on it. The desk binds the user's switch and gives the sound track to one
-    // output; the overlay has no switch and must say false out loud.
-    expect(wallpaper).toContain('property: "audioEnabled"');
-    expect(wallpaper).toContain("value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere");
-    expect(overlay).toContain('property: "audioEnabled"');
-    expect(overlay).toContain("value: false");
-  });
-
-  test("nothing decodes while nothing can see it", () => {
-    // Qt's FFmpeg engine drives its own clock, so a covered wallpaper keeps
-    // decoding until it is told to stop.
-    expect(wallpaper).toContain("readonly property bool fullscreenHere: visibleWorkspace ? visibleWorkspace.hasFullscreen : false");
-    expect(wallpaper).toContain("value: root.playbackWanted && !panel.fullscreenHere");
-    expect(overlay).toContain("active: root.videoBackground && root.opened");
+  test("the service still runs the data and notification path", () => {
+    expect(service).toContain("InfoModel {");
+    expect(service).toContain("function dispatchNotifications()");
+    expect(service).toContain('"omarchy-notification-send"');
+    expect(service).toContain('target: "infomarchy"');
   });
 });
 
@@ -358,7 +314,7 @@ describe("right column fits a 1080p desk", () => {
     expect(view).toContain('text: "v" + view.desk.version');
 
     // Esc closes the panel before it closes the whole desk.
-    expect(overlay).toContain("if (infoView.aboutOpen) infoView.aboutOpen = false; else root.close()");
+    expect(overlay).toContain("if (infoView.aboutOpen) infoView.aboutOpen = false; else root.requestClose()");
   });
 
   test("openUrl refuses any address the plugin does not itself ship", () => {
@@ -420,53 +376,19 @@ describe("LOCAL AI rows stay inside the card body", () => {
   test("the live geometry report is exposed over IPC for measuring, not guessing", () => {
     expect(view).toContain("function geometryReport(): string");
     const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
-    expect(service).toContain("function geometry(): string { return root.deskView ? root.deskView.geometryReport() : \"{}\" }");
+    expect(service).toContain("function geometry(): string { return \"{}\" }");
   });
 });
 
-describe("the desk can be pinned to one workspace", () => {
-  const settings = readFileSync(join(import.meta.dir, "InfoSettings.qml"), "utf8");
+describe("workspace pinning moved out of the plugin", () => {
   const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
 
-  test("0 means every workspace, so an install that never sets it is unchanged", () => {
-    expect(settings).toContain("property int deskWorkspace: 0");
-    // Both halves of applyConfig: a missing or malformed key must land on 0,
-    // never on some workspace the user never asked for.
-    expect(settings).toContain("deskWorkspace = parsed && Number.isInteger(parsed.deskWorkspace) ? Math.max(0, Math.min(maxWorkspace, parsed.deskWorkspace)) : 0");
-    expect(settings).toContain("deskWorkspace: deskWorkspace,");
-  });
-
-  test("an out-of-range workspace is refused, not clamped", () => {
-    // Clamping would pin the desk to workspace 1 for anyone who fat-fingers a
-    // value, which reads as the gate being broken rather than as a bad input.
-    // Hyprland's special workspaces are negative (olrec is -1337) and are not
-    // places the desk belongs.
-    const setter = settings.match(/function setDeskWorkspace\(workspace\) \{[\s\S]*?\n  \}/)?.[0];
-    expect(setter, "InfoSettings must expose setDeskWorkspace").toBeTruthy();
-    expect(setter).toContain("value < 0 || value > maxWorkspace");
-    expect(setter).toContain("value !== Math.round(value)");
-    expect(setter).toContain("return false");
-  });
-
-  test("the gate hides the cards, never the wallpaper", () => {
-    // Hiding the PanelWindow would take the wallpaper with it and leave every
-    // other workspace on the flat theme colour. The gate belongs on the view.
-    expect(service).toContain("visible: dashboardSettings.ready && dashboardSettings.dashboardVisible && panel.deskWorkspaceMatches");
-    expect(service).not.toMatch(/visible: !remapGuard\.remapping && .*deskWorkspace/);
-  });
-
-  test("an unknown workspace shows the desk rather than hiding it", () => {
-    // Early in startup there is no Hyprland monitor yet. An unset gate must
-    // never be the reason the dashboard is missing.
-    const match = service.match(/readonly property bool deskWorkspaceMatches:[\s\S]*?deskWorkspace\n/)?.[0];
-    expect(match, "Infomarchy must resolve deskWorkspaceMatches").toBeTruthy();
-    expect(match).toContain("dashboardSettings.deskWorkspace === 0");
-    expect(match).toContain("!visibleWorkspace");
-  });
-
-  test("the workspace is reachable over IPC, both ways", () => {
-    expect(service).toContain("function setDeskWorkspace(v: string): string");
-    expect(service).toContain("function getDeskWorkspace(): string");
+  test("the old Background-layer workspace gate is gone", () => {
+    // The dashboard is a normal window now, so it lives on one workspace by
+    // construction; Hyprland pins it there via a window rule instead of the
+    // plugin hiding cards on the other workspaces.
+    expect(service).not.toContain("deskWorkspaceMatches");
+    expect(service).not.toContain("setDeskWorkspace");
   });
 });
 

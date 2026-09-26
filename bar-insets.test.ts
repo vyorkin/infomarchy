@@ -54,19 +54,15 @@ describe("desk insets follow the live bar", () => {
 describe("the desk binding tracks the bar after load", () => {
   const qml = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
 
-  test("shell is injectable and the binding reads the live fields", () => {
-    // Omarchy only injects the plugin shell when the root declares `shell`.
-    // The three reads have to sit in the binding itself: a function that
-    // received the bar object would not subscribe to later position changes.
-    expect(qml).toContain("property var shell: null");
-    expect(qml).toContain("position: shell.bar.position");
-    expect(qml).toContain("barSize: shell.bar.barSize");
-    expect(qml).toContain("barHidden: shell.bar.barHidden");
-    expect(qml).toContain("topInset: root.barEdgeInsets.top");
-    expect(qml).toContain("rightInset: root.barEdgeInsets.right");
-    expect(qml).toContain("bottomInset: root.barEdgeInsets.bottom");
-    expect(qml).toContain("leftInset: root.barEdgeInsets.left");
-    expect(qml).toContain("leftMargin: panel.stageReservation");
+  test("the window is placed by the compositor, not padded under the bar", () => {
+    // The desk was a Background-layer surface that had to clear the Omarchy
+    // bar by hand. As a normal window the compositor places it, so the host
+    // no longer reads the bar at all.
+    expect(qml).not.toContain("barEdgeInsets");
+    expect(qml).not.toContain("shell.bar");
+    const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
+    expect(overlay).not.toContain("barEdgeInsets");
+    expect(overlay).not.toContain("shell.bar");
   });
 
   test("qmltestrunner covers a bar that moves after the binding exists", () => {
