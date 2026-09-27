@@ -49,7 +49,11 @@ const CEILINGS: Record<string, number> = {
   // unqualified, plus the two layout-positioning warnings the existing status
   // dot already produces, for the session dot beside it. Same false-positive
   // shape as the row above it, counted twice because there are now two rows.
-  "InfoView.qml": 593,
+  // 594 adds the whole-desk Flickable and its scrollbar: one more
+  // `Style.spacing`/`Style.font` read that qmllint reports as a missing
+  // property on the local module's inline QtObject, the same false positive
+  // the other ~160 of those already produce.
+  "InfoView.qml": 594,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
 };

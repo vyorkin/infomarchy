@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "InfomarchyScale"
 
 // Windowed host. Infomarchy's dashboard lives in a real Wayland application
 // window (Quickshell FloatingWindow) instead of a fullscreen layer-shell

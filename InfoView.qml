@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.Commons
+import "InfomarchyScale"
 
 // The dashboard itself. Hosted by Infomarchy.qml (background layer) and Overlay.qml
 // (summoned fullscreen). Everything is sized from Style.* and colored from the
@@ -1159,7 +1160,12 @@ Item {
   }
 
   // ---- layout ----------------------------------------------------------------
-  Item {
+  // The desk is laid out at its natural height and the window scrolls when it
+  // is taller than the viewport — which it is at the plugin's UI scale. The
+  // Flickable keeps the old margins as a frame; the wheel scrolls the whole
+  // dashboard, not just the RECENT list.
+  Flickable {
+    id: deskFlick
     anchors {
       fill: parent
       topMargin: view.topInset + view.gap
@@ -1167,9 +1173,21 @@ Item {
       rightMargin: view.rightInset + view.gap * 2
       bottomMargin: view.bottomInset + view.gap * 2
     }
+    contentWidth: width
+    contentHeight: layoutColumn.height
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+    flickableDirection: Flickable.VerticalFlick
 
     ColumnLayout {
-      anchors.fill: parent
+      id: layoutColumn
+      x: 0
+      y: 0
+      width: deskFlick.width
+      // Fill the viewport when the content is short (the old behaviour) and
+      // grow to its natural height when it is not, so nothing is cut off and
+      // there is something for the Flickable to scroll.
+      height: Math.max(deskFlick.height, implicitHeight)
       // Same token as card-to-card and column-to-column. sm (4px at scale 1)
       // left the module strip a gap short of the rest of the desk (lg / view.gap, 8px).
       spacing: view.gap
@@ -2838,6 +2856,34 @@ Item {
         }
         Item { Layout.row: 99; Layout.column: 0; Layout.fillHeight: true }
         }
+      }
+    }
+  }
+
+  // Vertical scrollbar for the whole desk. At the plugin's UI scale the
+  // dashboard is taller than the window, so this is how the cards below the
+  // fold stay reachable; the wheel also scrolls anywhere over the content.
+  Rectangle {
+    id: deskScrollbar
+    visible: deskFlick.contentHeight > deskFlick.height + 1
+    width: Math.max(2, Math.round(4 * Style.fontScale))
+    radius: width / 2
+    color: Util.alpha(view.desk.themeForeground, 0.35)
+    x: view.width - width - Style.spacing.sm
+    height: Math.max(Math.round(24 * Style.fontScale), deskFlick.height * deskFlick.height / Math.max(deskFlick.height, deskFlick.contentHeight))
+    y: deskFlick.y + Math.max(0, Math.min(deskFlick.height - height, (deskFlick.contentY / Math.max(1, deskFlick.contentHeight - deskFlick.height)) * Math.max(0, deskFlick.height - height)))
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      property real grabY: 0
+      property real grabContentY: 0
+      onPressed: function(mouse) { grabY = mouse.y; grabContentY = deskFlick.contentY }
+      onPositionChanged: function(mouse) {
+        var track = deskFlick.height - deskScrollbar.height
+        if (track <= 0) return
+        var span = Math.max(0, deskFlick.contentHeight - deskFlick.height)
+        deskFlick.contentY = Math.max(0, Math.min(span, grabContentY + (mouse.y - grabY) / track * span))
       }
     }
   }

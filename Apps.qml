@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell.Io
 import qs.Commons
+import "InfomarchyScale"
 
 // Infomarchy Apps owns app registration; systemd owns processes. This view only
 // requests actions and reads status, so unloading the desk cannot stop apps.

@@ -260,7 +260,7 @@ Omarchy Quattro with third-party shell plugin support, `bun` (**not** part of th
 
 ## It follows your theme
 
-There are no colours in this plugin. Infomarchy reads the active theme's `colors.toml` — `green`, `yellow`, `red`, `blue`, `cyan`, `magenta`, `foreground`, `background` — and falls back to Omarchy's `Color` singleton for anything a theme leaves out. Fonts and spacing come from Omarchy's `Style`, so `omarchy display text size` scales the desk too. Switch themes and the desk re-skins in place.
+There are no colours in this plugin. Infomarchy reads the active theme's `colors.toml` — `green`, `yellow`, `red`, `blue`, `cyan`, `magenta`, `foreground`, `background` — and falls back to Omarchy's `Color` singleton for anything a theme leaves out. Fonts and spacing come from Omarchy's `Style`, so `omarchy display text size` scales the desk too. The desk also carries its own `uiScale` multiplier (see Tuning) for when it needs to read larger than the shell-wide tokens without moving the bar and menus with it; raise it and run `omarchy restart shell`. Switch themes and the desk re-skins in place.
 
 The screenshots above are the **Last Call** theme. A theme gallery is on the roadmap — PRs with your theme's screenshot are very welcome.
 
@@ -322,6 +322,7 @@ omarchy-shell infomarchy setDemo false                                # return t
 | Knob | Where | Default |
 |---|---|---|
 | poll interval | `refreshMs` in `Infomarchy.qml` / `Overlay.qml` | 4000 / 3000 ms |
+| dashboard UI scale | `uiScale` in `InfomarchyScale/Style.qml`; takes effect after `omarchy restart shell` | 1.5 |
 | wallpaper dim | `wallpaperOpacity` in `Infomarchy.qml` | 0.32 |
 | wallpaper dashboard | `SUPER+I` or wallpaper IPC above; state survives shell/plugin restarts | visible |
 | desk workspace | `setDeskWorkspace` above; `0` is every workspace | 0 (every workspace) |
