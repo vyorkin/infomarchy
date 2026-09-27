@@ -64,6 +64,24 @@ o.window(
 
 Change `workspace = "10"` to any other workspace id you prefer.
 
+## Filling the monitor
+
+The window opens at its design size (3240x1320) so every column is visible on a
+large desk. To hand it the whole monitor, add a fullscreen rule; swap it for
+`{ maximize = true }` to fill the work area but keep the Omarchy bar visible:
+
+```lua
+-- Give the desk the whole monitor.
+o.window(
+  { class = "^org\\.quickshell$", title = "^Infomarchy$" },
+  { fullscreen = true }
+)
+```
+
+Window rules are applied by Hyprland when the window opens, so a config that is
+already loaded needs `hyprctl reload` (or a fresh login) before the rule reaches
+an already-running shell.
+
 ## Toggling with SUPER+D
 
 Bind `SUPER + D` to a small helper that behaves like an app switcher:
